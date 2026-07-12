@@ -8,7 +8,6 @@ import {
   firstIncompleteLessonId,
   loadProgress,
   recordAttempt,
-  saveProgress,
   type ProgressState,
 } from './lib/progress'
 import { synth } from './lib/synth'
@@ -29,7 +28,6 @@ export default function App() {
 
   function updateProgress(next: ProgressState) {
     setProgress(next)
-    saveProgress(next)
   }
 
   return (
@@ -42,6 +40,7 @@ export default function App() {
           <PathView
             progress={progress}
             continueId={continueId}
+            onResetProgress={updateProgress}
             onOpenLesson={(id) => {
               void synth.unlock()
               setScreen({ name: 'lesson', id })

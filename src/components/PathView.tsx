@@ -1,14 +1,26 @@
 import { LEVELS, LESSONS, lessonsForLevel } from '../data/curriculum'
-import { completedCount, levelCompletion, type ProgressState } from '../lib/progress'
+import {
+  completedCount,
+  levelCompletion,
+  type ProgressState,
+} from '../lib/progress'
+import { ProgressTracker } from './ProgressTracker'
 
 type PathViewProps = {
   progress: ProgressState
   onOpenLesson: (id: string) => void
   onFreePlay: () => void
+  onResetProgress: (next: ProgressState) => void
   continueId: string
 }
 
-export function PathView({ progress, onOpenLesson, onFreePlay, continueId }: PathViewProps) {
+export function PathView({
+  progress,
+  onOpenLesson,
+  onFreePlay,
+  onResetProgress,
+  continueId,
+}: PathViewProps) {
   const done = completedCount(progress)
   const total = LESSONS.length
 
@@ -30,9 +42,11 @@ export function PathView({ progress, onOpenLesson, onFreePlay, continueId }: Pat
           </button>
         </div>
         <p className="path__progress" aria-live="polite">
-          {done} of {total} lessons complete
+          {done} of {total} lessons complete · progress saved in this browser
         </p>
       </header>
+
+      <ProgressTracker progress={progress} onReset={onResetProgress} />
 
       <div className="path__levels">
         {LEVELS.map((level) => {
@@ -55,6 +69,8 @@ export function PathView({ progress, onOpenLesson, onFreePlay, continueId }: Pat
                 {lessons.map((lesson, i) => {
                   const status = progress.lessons[lesson.id]
                   const complete = Boolean(status?.completed)
+                  const best =
+                    status && status.attempts > 0 ? Math.round(status.bestScore * 100) : null
                   return (
                     <li key={lesson.id}>
                       <button
@@ -65,7 +81,11 @@ export function PathView({ progress, onOpenLesson, onFreePlay, continueId }: Pat
                         <span className="lesson-row__index">{String(i + 1).padStart(2, '0')}</span>
                         <span className="lesson-row__body">
                           <strong>{lesson.title}</strong>
-                          <span className="muted">{lesson.summary}</span>
+                          <span className="muted">
+                            {lesson.summary}
+                            {best !== null ? ` · Best ${best}%` : ''}
+                            {status?.attempts ? ` · ${status.attempts} try${status.attempts === 1 ? '' : 's'}` : ''}
+                          </span>
                         </span>
                         <span className="lesson-row__status">
                           {complete ? 'Done' : continueId === lesson.id ? 'Next' : 'Open'}
