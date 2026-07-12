@@ -1,0 +1,102 @@
+.staff {
+  width: 100%;
+  overflow-x: auto;
+  padding: 0.35rem 0 0.15rem;
+  border-radius: 0.85rem;
+  background: oklch(0.985 0.008 220);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.staff__svg {
+  display: block;
+  min-width: 280px;
+  height: auto;
+}
+
+.staff__line {
+  stroke: oklch(0.42 0.03 230);
+  stroke-width: 1.25;
+}
+
+.staff__ledger {
+  stroke: oklch(0.42 0.03 230);
+  stroke-width: 1.15;
+}
+
+.staff__clef {
+  font-size: 54px;
+  fill: var(--ink);
+  font-family: 'Noto Music', 'Segoe UI Symbol', serif;
+}
+
+.staff__clef--bass {
+  font-size: 42px;
+}
+
+.staff__accidental {
+  font-size: 18px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+
+.staff__head.is-filled {
+  fill: var(--ink);
+}
+
+.staff__head.is-open {
+  fill: oklch(0.985 0.008 220);
+  stroke: var(--ink);
+  stroke-width: 1.6;
+}
+
+.staff__stem {
+  stroke: var(--ink);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.staff__note.is-done .staff__head.is-filled {
+  fill: var(--sage);
+}
+
+.staff__note.is-done .staff__stem,
+.staff__note.is-done .staff__accidental {
+  stroke: var(--sage);
+  fill: var(--sage);
+}
+
+.staff__note.is-current .staff__head.is-filled {
+  fill: var(--amber-deep);
+}
+
+.staff__note.is-current .staff__stem,
+.staff__note.is-current .staff__accidental {
+  stroke: var(--amber-deep);
+  fill: var(--amber-deep);
+}
+
+.staff__note.is-miss .staff__head.is-filled {
+  fill: var(--danger);
+}
+
+.staff__pulse {
+  fill: none;
+  stroke: oklch(0.58 0.12 195 / 0.55);
+  stroke-width: 2;
+  animation: staff-pulse 1.1s var(--ease-out) infinite;
+}
+
+@keyframes staff-pulse {
+  from {
+    opacity: 0.85;
+    transform-box: fill-box;
+    transform-origin: center;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
+    transform: scale(1.35);
+  }
+}

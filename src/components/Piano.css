@@ -1,0 +1,132 @@
+.piano {
+  --white-w: clamp(2.4rem, 4.2vw, 3.4rem);
+  --white-h: clamp(9.5rem, 22vw, 13.5rem);
+  --black-w: calc(var(--white-w) * 0.58);
+  --black-h: calc(var(--white-h) * 0.62);
+  position: relative;
+  display: inline-flex;
+  padding: 0.85rem 0.85rem 1.1rem;
+  border-radius: 1.1rem 1.1rem 0.55rem 0.55rem;
+  background:
+    linear-gradient(180deg, oklch(0.32 0.03 55) 0%, oklch(0.22 0.025 50) 100%);
+  box-shadow:
+    0 18px 40px oklch(0.25 0.03 50 / 0.35),
+    inset 0 1px 0 oklch(0.55 0.04 70 / 0.35);
+  user-select: none;
+  touch-action: none;
+}
+
+.piano__whites {
+  display: flex;
+  gap: 0.18rem;
+}
+
+.piano__blacks {
+  pointer-events: none;
+  position: absolute;
+  inset: 0.85rem 0.85rem auto;
+  display: flex;
+  height: var(--black-h);
+}
+
+.piano__black-slot {
+  position: relative;
+  width: var(--white-w);
+  margin-right: 0.18rem;
+  flex: 0 0 auto;
+}
+
+.piano__key {
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  transition: transform 90ms cubic-bezier(0.16, 1, 0.3, 1), background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.piano__key--white {
+  width: var(--white-w);
+  height: var(--white-h);
+  border-radius: 0 0 0.35rem 0.35rem;
+  background: linear-gradient(180deg, oklch(0.97 0.015 85) 0%, oklch(0.91 0.02 80) 100%);
+  box-shadow:
+    inset 0 -2px 0 oklch(0.78 0.02 75),
+    0 1px 0 oklch(0.2 0.02 50 / 0.15);
+  color: oklch(0.42 0.03 55);
+}
+
+.piano__key--white.is-active {
+  transform: translateY(2px);
+  background: linear-gradient(180deg, oklch(0.93 0.03 80) 0%, oklch(0.86 0.035 75) 100%);
+}
+
+.piano__key--white.is-guide {
+  background: linear-gradient(180deg, oklch(0.93 0.06 145) 0%, oklch(0.86 0.07 145) 100%);
+  box-shadow:
+    inset 0 -2px 0 oklch(0.62 0.08 145),
+    0 0 0 2px oklch(0.72 0.1 145 / 0.55);
+}
+
+.piano__key--white.is-success {
+  background: linear-gradient(180deg, oklch(0.92 0.07 145) 0%, oklch(0.84 0.09 145) 100%);
+}
+
+.piano__key--white.is-error {
+  background: linear-gradient(180deg, oklch(0.9 0.08 25) 0%, oklch(0.82 0.1 25) 100%);
+}
+
+.piano__key--black {
+  pointer-events: auto;
+  position: absolute;
+  top: 0;
+  left: calc(100% - var(--black-w) / 2);
+  width: var(--black-w);
+  height: var(--black-h);
+  z-index: 2;
+  border-radius: 0 0 0.28rem 0.28rem;
+  background: linear-gradient(180deg, oklch(0.28 0.02 55) 0%, oklch(0.16 0.015 50) 100%);
+  box-shadow:
+    inset 0 1px 0 oklch(0.45 0.03 60 / 0.4),
+    0 6px 10px oklch(0.15 0.02 50 / 0.35);
+}
+
+.piano__key--black.is-active {
+  transform: translateY(2px);
+  background: linear-gradient(180deg, oklch(0.34 0.03 55) 0%, oklch(0.2 0.02 50) 100%);
+}
+
+.piano__key--black.is-guide {
+  box-shadow:
+    inset 0 1px 0 oklch(0.55 0.05 145 / 0.5),
+    0 0 0 2px oklch(0.72 0.12 145 / 0.7);
+  background: linear-gradient(180deg, oklch(0.35 0.06 145) 0%, oklch(0.2 0.05 145) 100%);
+}
+
+.piano__key--black.is-success {
+  background: linear-gradient(180deg, oklch(0.38 0.08 145) 0%, oklch(0.22 0.06 145) 100%);
+}
+
+.piano__key--black.is-error {
+  background: linear-gradient(180deg, oklch(0.38 0.1 25) 0%, oklch(0.22 0.08 25) 100%);
+}
+
+.piano__label {
+  position: absolute;
+  bottom: 0.55rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.7;
+}
+
+@media (max-width: 720px) {
+  .piano {
+    --white-w: clamp(1.85rem, 7.2vw, 2.5rem);
+    --white-h: clamp(8rem, 38vw, 11rem);
+    overflow-x: auto;
+    max-width: 100%;
+  }
+}
