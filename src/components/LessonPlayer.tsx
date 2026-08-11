@@ -1,24 +1,65 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { Lesson } from '../data/curriculum'
 import { nextLesson } from '../data/curriculum'
 import type { MidiConnection } from '../lib/midi'
 import { metronome } from '../lib/metronome'
-import { noteLabel, type NoteName, type Pitch } from '../lib/music'
+import { noteLabel, pitchToMidi, type NoteName, type Pitch } from '../lib/music'
 import {
   combineScores,
   DEFAULT_BPM,
   expectedOnsets,
   gradeTiming,
   type TimingGrade,
+  type TimingResult,
 } from '../lib/rhythm'
 import { synth } from '../lib/synth'
 import { Piano } from './Piano'
 import { Staff, type StaffNote } from './Staff'
 
+/** All chord notes must land within this window of the first one. */
+const CHORD_WINDOW_MS = 400
+const MIN_TEMPO_SCALE = 0.5
+const MAX_TEMPO_SCALE = 1.2
+const TEMPO_STEP = 0.1
+
 function formatPitch(pitch: Pitch): string {
   const note = pitch.replace(/\d+$/, '') as NoteName
   const octave = pitch.match(/\d+$/)?.[0] ?? ''
   return `${noteLabel(note)}${octave}`
+}
+
+function formatStep(step: Pitch[]): string {
+  return step.map(formatPitch).join(' + ')
+}
+
+/** Coaching line for a wrong pitch: direction and distance to the expected note. */
+function describeWrongPitch(played: Pitch, expected: Pitch): string {
+  const diff = pitchToMidi(played) - pitchToMidi(expected)
+  if (diff !== 0 && diff % 12 === 0) {
+    const octaves = Math.abs(diff / 12)
+    return `Right note, wrong octave — go ${diff > 0 ? 'down' : 'up'} ${
+      octaves === 1 ? 'an octave' : `${octaves} octaves`
+    }.`
+  }
+  const half = Math.abs(diff)
+  const dir = diff > 0 ? 'lower' : 'higher'
+  return `You played ${formatPitch(played)} — ${formatPitch(expected)} is ${half} half-step${
+    half === 1 ? '' : 's'
+  } ${dir}.`
+}
+
+function describeTiming(result: TimingResult): string {
+  const ms = Math.round(Math.abs(result.errorMs))
+  switch (result.grade) {
+    case 'perfect':
+      return 'Perfect timing.'
+    case 'early':
+      return `Early by ${ms} ms — let the click come to you.`
+    case 'late':
+      return `Late by ${ms} ms — strike right on the click.`
+    default:
+      return `Right note, but ${result.errorMs < 0 ? 'early' : 'late'} by ${ms} ms — way off the beat.`
+  }
 }
 
 type LessonPlayerProps = {
@@ -30,38 +71,135 @@ type LessonPlayerProps = {
 
 type Phase = 'teach' | 'countdown' | 'practice' | 'result'
 
+type LessonState = {
+  phase: Phase
+  index: number
+  hits: number
+  misses: number
+  timingScores: number[]
+  /** Chord notes collected so far for the current step. */
+  collected: Pitch[]
+  /** Coaching line shown under the practice status. */
+  feedback: string | null
+  feedbackKind: 'ok' | 'warn'
+  /** Miss counts per expected step label, for result-screen tips. */
+  missCounts: Record<string, number>
+  earlyHits: number
+  lateHits: number
+}
+
+type LessonAction =
+  | { type: 'SET_PHASE'; phase: Phase }
+  | { type: 'ADVANCE'; index: number }
+  | { type: 'COLLECT'; pitch: Pitch }
+  | { type: 'RECORD_HIT'; timingScore?: number; grade?: TimingGrade; feedback?: string | null }
+  | { type: 'RECORD_MISS'; targetLabel: string; feedback: string; clearCollected?: boolean }
+  | { type: 'RESET' }
+
+const initialLessonState: LessonState = {
+  phase: 'teach',
+  index: 0,
+  hits: 0,
+  misses: 0,
+  timingScores: [],
+  collected: [],
+  feedback: null,
+  feedbackKind: 'ok',
+  missCounts: {},
+  earlyHits: 0,
+  lateHits: 0,
+}
+
+function lessonReducer(state: LessonState, action: LessonAction): LessonState {
+  switch (action.type) {
+    case 'SET_PHASE':
+      return { ...state, phase: action.phase }
+    case 'ADVANCE':
+      return { ...state, index: action.index, collected: [] }
+    case 'COLLECT':
+      return { ...state, collected: [...state.collected, action.pitch] }
+    case 'RECORD_HIT':
+      return {
+        ...state,
+        hits: state.hits + 1,
+        collected: [],
+        timingScores:
+          action.timingScore !== undefined
+            ? [...state.timingScores, action.timingScore]
+            : state.timingScores,
+        feedback: action.feedback ?? null,
+        feedbackKind: action.grade === 'miss' ? 'warn' : 'ok',
+        earlyHits: action.grade === 'early' ? state.earlyHits + 1 : state.earlyHits,
+        lateHits: action.grade === 'late' ? state.lateHits + 1 : state.lateHits,
+      }
+    case 'RECORD_MISS':
+      return {
+        ...state,
+        misses: state.misses + 1,
+        collected: action.clearCollected ? [] : state.collected,
+        feedback: action.feedback,
+        feedbackKind: 'warn',
+        missCounts: {
+          ...state.missCounts,
+          [action.targetLabel]: (state.missCounts[action.targetLabel] ?? 0) + 1,
+        },
+      }
+    case 'RESET':
+      return initialLessonState
+    default:
+      return state
+  }
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonPlayerProps) {
-  const [phase, setPhase] = useState<Phase>('teach')
-  const [index, setIndex] = useState(0)
-  const [hits, setHits] = useState(0)
-  const [misses, setMisses] = useState(0)
-  const [timingScores, setTimingScores] = useState<number[]>([])
+  const [lessonState, dispatch] = useReducer(lessonReducer, initialLessonState)
   const [lastGrade, setLastGrade] = useState<TimingGrade | null>(null)
   const [flashOk, setFlashOk] = useState<Pitch[]>([])
   const [flashBad, setFlashBad] = useState<Pitch[]>([])
   const [demoPlaying, setDemoPlaying] = useState(false)
   const [countLeft, setCountLeft] = useState(0)
   const [midi, setMidi] = useState<MidiConnection | null>(null)
+  const [tempoScale, setTempoScale] = useState(1)
+
   const completedRef = useRef(false)
   const practiceStartedAt = useRef(0)
-  const indexRef = useRef(0)
-  const hitsRef = useRef(0)
-  const missesRef = useRef(0)
-  const timingRef = useRef<number[]>([])
-  const phaseRef = useRef<Phase>('teach')
+  const chordTimer = useRef<number | null>(null)
+  const chordStartElapsed = useRef(0)
+  // Source of truth for chord collection: MIDI chords deliver several noteOns in
+  // the same tick, before React re-renders, so state alone would be stale.
+  const collectedRef = useRef<Pitch[]>([])
 
-  const targets = lesson.targets
+  const {
+    phase,
+    index,
+    hits,
+    misses,
+    timingScores,
+    collected,
+    feedback,
+    feedbackKind,
+    missCounts,
+    earlyHits,
+    lateHits,
+  } = lessonState
+
+  /** Each step is one or more pitches; multi-pitch steps are chords. */
+  const steps = useMemo<Pitch[][]>(
+    () => lesson.targets.map((t) => (Array.isArray(t) ? t : [t])),
+    [lesson.targets],
+  )
   const bpm = lesson.bpm ?? DEFAULT_BPM
+  const effectiveBpm = Math.max(30, Math.round(bpm * tempoScale))
   const gradeRhythm = Boolean(lesson.gradeRhythm)
   const countIn = lesson.countIn ?? 4
-  const currentTarget = targets[index]
+  const currentStep = steps[index] ?? []
   const onsets = useMemo(
-    () => expectedOnsets(targets.length, bpm, lesson.rhythm),
-    [targets.length, bpm, lesson.rhythm],
+    () => expectedOnsets(steps.length, effectiveBpm, lesson.rhythm),
+    [steps.length, effectiveBpm, lesson.rhythm],
   )
 
   const pitchScore = useMemo(() => {
@@ -81,63 +219,63 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
   )
 
   const passScore = lesson.passScore ?? 0.7
-  const passed = score >= passScore && (lesson.kind === 'learn' || hits >= targets.length)
+  const passed = score >= passScore && (lesson.kind === 'learn' || hits >= steps.length)
 
   const staffNotes: StaffNote[] = useMemo(
     () =>
-      targets.map((pitch, i) => ({
-        pitch,
+      steps.map((pitches, i) => ({
+        pitches,
         duration: lesson.rhythm?.[i]?.duration ?? 1,
         state: i < index ? 'done' : i === index && phase === 'practice' ? 'current' : 'idle',
       })),
-    [targets, lesson.rhythm, index, phase],
+    [steps, lesson.rhythm, index, phase],
   )
 
-  useEffect(() => {
-    indexRef.current = index
-  }, [index])
-  useEffect(() => {
-    hitsRef.current = hits
-  }, [hits])
-  useEffect(() => {
-    missesRef.current = misses
-  }, [misses])
-  useEffect(() => {
-    timingRef.current = timingScores
-  }, [timingScores])
-  useEffect(() => {
-    phaseRef.current = phase
-  }, [phase])
+  const clearChordTimer = useCallback(() => {
+    if (chordTimer.current !== null) {
+      window.clearTimeout(chordTimer.current)
+      chordTimer.current = null
+    }
+  }, [])
+
+  const resetChordCollection = useCallback(() => {
+    clearChordTimer()
+    collectedRef.current = []
+  }, [clearChordTimer])
 
   useEffect(() => {
-    setPhase('teach')
-    setIndex(0)
-    setHits(0)
-    setMisses(0)
-    setTimingScores([])
+    dispatch({ type: 'RESET' })
     setLastGrade(null)
     setFlashOk([])
     setFlashBad([])
     setCountLeft(0)
+    setTempoScale(1)
     completedRef.current = false
+    resetChordCollection()
     metronome.stop()
-  }, [lesson.id])
+  }, [lesson.id, resetChordCollection])
 
-  useEffect(() => () => metronome.stop(), [])
+  useEffect(
+    () => () => {
+      resetChordCollection()
+      metronome.stop()
+    },
+    [resetChordCollection],
+  )
 
   async function playDemo() {
     if (demoPlaying) return
     setDemoPlaying(true)
     await synth.unlock()
-    const notes = lesson.demo ?? lesson.targets
+    const demoSteps = (lesson.demo ?? lesson.targets).map((t) => (Array.isArray(t) ? t : [t]))
     const rhythm = lesson.rhythm
-    for (let i = 0; i < notes.length; i += 1) {
-      const pitch = notes[i]
+    for (let i = 0; i < demoSteps.length; i += 1) {
+      const pitches = demoSteps[i]
       const durationBeats = rhythm?.[i]?.duration ?? 1
-      const ms = (durationBeats * 60_000) / bpm
-      synth.noteOn(pitch)
+      const ms = (durationBeats * 60_000) / effectiveBpm
+      for (const pitch of pitches) synth.noteOn(pitch)
       await sleep(Math.max(180, ms * 0.85))
-      synth.noteOff(pitch)
+      for (const pitch of pitches) synth.noteOff(pitch)
       await sleep(Math.max(40, ms * 0.15))
     }
     setDemoPlaying(false)
@@ -146,6 +284,7 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
   function finish(finalHits: number, finalMisses: number, finalTiming: number[]) {
     if (completedRef.current) return
     completedRef.current = true
+    resetChordCollection()
     metronome.stop()
     const total = finalHits + finalMisses
     const finalPitch = total === 0 ? 1 : finalHits / total
@@ -155,91 +294,147 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
         : 1
     const finalScore = gradeRhythm ? combineScores(finalPitch, finalTimingAvg) : finalPitch
     const ok = lesson.kind === 'learn' || finalScore >= passScore
-    setPhase('result')
+    dispatch({ type: 'SET_PHASE', phase: 'result' })
     onComplete(finalScore, ok)
   }
 
   const handleNote = useCallback(
     (pitch: Pitch) => {
-      if (phaseRef.current !== 'practice' || lesson.kind === 'learn') return
+      if (phase !== 'practice' || lesson.kind === 'learn') return
 
       if (lesson.kind === 'find') {
-        if (pitch === targets[0]) {
+        const expected = steps[0]?.[0]
+        if (!expected) return
+        if (pitch === expected) {
           setFlashOk([pitch])
-          setHits(1)
-          hitsRef.current = 1
-          finish(1, missesRef.current, timingRef.current)
+          dispatch({ type: 'RECORD_HIT', feedback: 'Found it.' })
+          finish(1, misses, timingScores)
         } else {
           setFlashBad([pitch])
-          setMisses((m) => {
-            missesRef.current = m + 1
-            return m + 1
+          dispatch({
+            type: 'RECORD_MISS',
+            targetLabel: formatPitch(expected),
+            feedback: describeWrongPitch(pitch, expected),
           })
           window.setTimeout(() => setFlashBad([]), 280)
         }
         return
       }
 
-      const expected = targets[indexRef.current]
-      if (pitch === expected) {
-        let timingHit = 1
-        if (gradeRhythm) {
-          const elapsed = performance.now() - practiceStartedAt.current
-          const expectedMs = onsets[indexRef.current] ?? elapsed
-          const result = gradeTiming(expectedMs, elapsed)
-          timingHit = result.score
-          setLastGrade(result.grade)
-          setTimingScores((prev) => {
-            const next = [...prev, timingHit]
-            timingRef.current = next
-            return next
-          })
-        }
+      const step = steps[index]
+      if (!step) return
+      const isChord = step.length > 1
 
-        setFlashOk([pitch])
-        const nextHits = hitsRef.current + 1
-        hitsRef.current = nextHits
-        setHits(nextHits)
-        const nextIndex = indexRef.current + 1
-        if (nextIndex >= targets.length) {
-          finish(nextHits, missesRef.current, timingRef.current)
-        } else {
-          indexRef.current = nextIndex
-          setIndex(nextIndex)
-          window.setTimeout(() => setFlashOk([]), 180)
-        }
-      } else {
+      if (!step.includes(pitch)) {
         setFlashBad([pitch])
         setLastGrade('miss')
-        setMisses((m) => {
-          missesRef.current = m + 1
-          return m + 1
+        const remaining = step.filter((p) => !collectedRef.current.includes(p))
+        dispatch({
+          type: 'RECORD_MISS',
+          targetLabel: formatStep(step),
+          feedback: isChord
+            ? `${formatPitch(pitch)} isn’t in this chord — you need ${formatStep(remaining)}.`
+            : describeWrongPitch(pitch, step[0]),
         })
         window.setTimeout(() => setFlashBad([]), 280)
+        return
+      }
+
+      if (isChord && collectedRef.current.includes(pitch)) return
+
+      const elapsed = performance.now() - practiceStartedAt.current
+
+      const completeStep = (onsetElapsed: number) => {
+        resetChordCollection()
+        let timingHit = 1
+        let grade: TimingGrade | undefined
+        let stepFeedback: string | null = null
+        if (gradeRhythm) {
+          const expectedMs = onsets[index] ?? onsetElapsed
+          const result = gradeTiming(expectedMs, onsetElapsed)
+          timingHit = result.score
+          grade = result.grade
+          stepFeedback = describeTiming(result)
+          setLastGrade(result.grade)
+        } else if (isChord) {
+          stepFeedback = 'Chord landed — nice and together.'
+        }
+        setFlashOk(step)
+        dispatch({
+          type: 'RECORD_HIT',
+          timingScore: gradeRhythm ? timingHit : undefined,
+          grade,
+          feedback: stepFeedback,
+        })
+        const nextIndex = index + 1
+        if (nextIndex >= steps.length) {
+          finish(hits + 1, misses, gradeRhythm ? [...timingScores, timingHit] : timingScores)
+        } else {
+          dispatch({ type: 'ADVANCE', index: nextIndex })
+          window.setTimeout(() => setFlashOk([]), 180)
+        }
+      }
+
+      if (!isChord) {
+        completeStep(elapsed)
+        return
+      }
+
+      const wasEmpty = collectedRef.current.length === 0
+      const nextCollected = [...collectedRef.current, pitch]
+      if (nextCollected.length === step.length) {
+        completeStep(wasEmpty ? elapsed : chordStartElapsed.current)
+        return
+      }
+
+      collectedRef.current = nextCollected
+      dispatch({ type: 'COLLECT', pitch })
+      setFlashOk(nextCollected)
+
+      if (wasEmpty) {
+        chordStartElapsed.current = elapsed
+        chordTimer.current = window.setTimeout(() => {
+          chordTimer.current = null
+          collectedRef.current = []
+          dispatch({
+            type: 'RECORD_MISS',
+            targetLabel: formatStep(step),
+            feedback: `Too spread out — press ${formatStep(step)} together, like one key.`,
+            clearCollected: true,
+          })
+          setFlashOk([])
+          setFlashBad(step)
+          window.setTimeout(() => setFlashBad([]), 280)
+        }, CHORD_WINDOW_MS)
       }
     },
-    [lesson.kind, targets, gradeRhythm, onsets],
+    [
+      phase,
+      lesson.kind,
+      steps,
+      index,
+      hits,
+      misses,
+      timingScores,
+      gradeRhythm,
+      onsets,
+      resetChordCollection,
+    ],
   )
 
-  async function startPractice() {
+  async function startPractice(scale = tempoScale) {
     await synth.unlock()
     await metronome.unlock()
     completedRef.current = false
-    setIndex(0)
-    indexRef.current = 0
-    setHits(0)
-    hitsRef.current = 0
-    setMisses(0)
-    missesRef.current = 0
-    setTimingScores([])
-    timingRef.current = []
+    resetChordCollection()
+    dispatch({ type: 'RESET' })
     setLastGrade(null)
     setFlashOk([])
     setFlashBad([])
 
+    const startBpm = Math.max(30, Math.round(bpm * scale))
     if (gradeRhythm) {
-      setPhase('countdown')
-      phaseRef.current = 'countdown'
+      dispatch({ type: 'SET_PHASE', phase: 'countdown' })
       setCountLeft(countIn)
       let heard = 0
       metronome.onBeat = () => {
@@ -249,45 +444,70 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
         if (heard >= countIn) {
           metronome.onBeat = null
           // First note is due on the next click after the count-in.
-          const beatMs = 60_000 / bpm
+          const beatMs = 60_000 / startBpm
           practiceStartedAt.current = performance.now() + beatMs
-          setPhase('practice')
-          phaseRef.current = 'practice'
+          dispatch({ type: 'SET_PHASE', phase: 'practice' })
         }
       }
-      metronome.start(bpm, 4)
+      metronome.start(startBpm, 4)
     } else {
       metronome.onBeat = null
       practiceStartedAt.current = performance.now()
-      setPhase('practice')
-      phaseRef.current = 'practice'
+      dispatch({ type: 'SET_PHASE', phase: 'practice' })
     }
   }
 
   function resetAttempt() {
     metronome.stop()
+    resetChordCollection()
     completedRef.current = false
-    setIndex(0)
-    setHits(0)
-    setMisses(0)
-    setTimingScores([])
+    dispatch({ type: 'RESET' })
     setLastGrade(null)
     setFlashOk([])
     setFlashBad([])
     if (lesson.kind === 'learn') {
-      setPhase('teach')
+      dispatch({ type: 'SET_PHASE', phase: 'teach' })
     } else {
       void startPractice()
     }
   }
 
+  function retrySlower() {
+    const next = Math.max(MIN_TEMPO_SCALE, Number((tempoScale - TEMPO_STEP).toFixed(2)))
+    setTempoScale(next)
+    void startPractice(next)
+  }
+
+  function retryFullSpeed() {
+    setTempoScale(1)
+    void startPractice(1)
+  }
+
+  const tips = useMemo(() => {
+    if (phase !== 'result') return []
+    const list: string[] = []
+    const worst = Object.entries(missCounts).sort((a, b) => b[1] - a[1])[0]
+    if (worst && worst[1] >= 2) {
+      list.push(`${worst[0]} caused ${worst[1]} misses — find it on the keys before you restart.`)
+    }
+    const timedHits = earlyHits + lateHits
+    if (gradeRhythm && timedHits >= 3) {
+      if (earlyHits >= lateHits * 2) list.push('You tend to rush — let the click come to you.')
+      else if (lateHits >= earlyHits * 2)
+        list.push('You tend to drag — strike right as the click sounds.')
+    }
+    if (!passed && gradeRhythm && timingScore < 0.75 && tempoScale > MIN_TEMPO_SCALE) {
+      list.push('Slow the tempo, nail every note, then build speed back up.')
+    }
+    return list
+  }, [phase, missCounts, earlyHits, lateHits, gradeRhythm, passed, timingScore, tempoScale])
+
   const guide =
-    phase === 'practice' && (lesson.kind === 'find' || lesson.kind === 'sequence' || lesson.kind === 'play-along')
-      ? currentTarget
-        ? [currentTarget]
-        : []
+    phase === 'practice' &&
+    (lesson.kind === 'find' || lesson.kind === 'sequence' || lesson.kind === 'play-along')
+      ? currentStep
       : lesson.kind === 'learn'
-        ? lesson.targets
+        ? steps.flat()
         : []
 
   const nxt = nextLesson(lesson.id)
@@ -295,6 +515,12 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
     midi?.status === 'ready'
       ? midi.message
       : midi?.message ?? 'MIDI: connect your Yamaha via USB'
+
+  const currentIsChord = currentStep.length > 1
+  const slowerBpm = Math.max(
+    30,
+    Math.round(bpm * Math.max(MIN_TEMPO_SCALE, Number((tempoScale - TEMPO_STEP).toFixed(2)))),
+  )
 
   return (
     <section className="lesson">
@@ -321,65 +547,108 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
         <Staff
           notes={staffNotes}
           clef={lesson.clef ?? 'treble'}
-          cursor={phase === 'practice' || phase === 'countdown' ? index : phase === 'result' ? targets.length : 0}
+          cursor={phase === 'practice' || phase === 'countdown' ? index : phase === 'result' ? steps.length : 0}
           label={`${lesson.title} notation`}
         />
       </div>
 
       {phase === 'teach' && (
-        <div className="lesson__actions">
-          <button type="button" className="btn btn--ghost" onClick={() => void playDemo()} disabled={demoPlaying}>
-            {demoPlaying ? 'Playing…' : 'Hear it'}
-          </button>
-          <button
-            type="button"
-            className="btn btn--primary"
-            onClick={() => {
-              if (lesson.kind === 'learn') {
-                finish(1, 0, [])
-              } else {
-                void startPractice()
-              }
-            }}
-          >
-            {lesson.kind === 'learn' ? 'Mark complete' : gradeRhythm ? 'Start with metronome' : 'Start practice'}
-          </button>
-        </div>
+        <>
+          {gradeRhythm && (
+            <div className="lesson__tempo" role="group" aria-label="Practice tempo">
+              <button
+                type="button"
+                className="btn btn--ghost btn--compact"
+                onClick={() =>
+                  setTempoScale((s) => Math.max(MIN_TEMPO_SCALE, Number((s - TEMPO_STEP).toFixed(2))))
+                }
+                disabled={tempoScale <= MIN_TEMPO_SCALE}
+              >
+                Slower
+              </button>
+              <span className="lesson__tempo-value">
+                {effectiveBpm} BPM
+                {tempoScale !== 1 && <em> · {Math.round(tempoScale * 100)}%</em>}
+              </span>
+              <button
+                type="button"
+                className="btn btn--ghost btn--compact"
+                onClick={() =>
+                  setTempoScale((s) => Math.min(MAX_TEMPO_SCALE, Number((s + TEMPO_STEP).toFixed(2))))
+                }
+                disabled={tempoScale >= MAX_TEMPO_SCALE}
+              >
+                Faster
+              </button>
+            </div>
+          )}
+          <div className="lesson__actions">
+            <button type="button" className="btn btn--ghost" onClick={() => void playDemo()} disabled={demoPlaying}>
+              {demoPlaying ? 'Playing…' : 'Hear it'}
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => {
+                if (lesson.kind === 'learn') {
+                  finish(1, 0, [])
+                } else {
+                  void startPractice()
+                }
+              }}
+            >
+              {lesson.kind === 'learn' ? 'Mark complete' : gradeRhythm ? 'Start with metronome' : 'Start practice'}
+            </button>
+          </div>
+        </>
       )}
 
       {phase === 'countdown' && (
         <div className="lesson__countdown" aria-live="assertive">
           <span className="lesson__countdown-beat">{countLeft}</span>
-          <p className="muted">Get ready · {bpm} BPM</p>
+          <p className="muted">Get ready · {effectiveBpm} BPM</p>
         </div>
       )}
 
       {phase === 'practice' && (
-        <div className="lesson__status" aria-live="polite">
-          <div>
-            <span className="muted">Next</span>
-            <strong>{formatPitch(currentTarget)}</strong>
-          </div>
-          <div>
-            <span className="muted">Pitch</span>
-            <strong>{Math.round(pitchScore * 100)}%</strong>
-          </div>
-          {gradeRhythm && (
+        <>
+          <div className="lesson__status" aria-live="polite">
             <div>
-              <span className="muted">Timing</span>
+              <span className="muted">{currentIsChord ? 'Next chord' : 'Next'}</span>
               <strong>
-                {Math.round(timingScore * 100)}%
-                {lastGrade ? ` · ${lastGrade}` : ''}
+                {formatStep(currentStep)}
+                {currentIsChord && collected.length > 0 && ` · ${collected.length}/${currentStep.length} held`}
               </strong>
             </div>
-          )}
-          {gradeRhythm && (
             <div>
-              <span className="muted">Tempo</span>
-              <strong>{bpm} BPM</strong>
+              <span className="muted">Pitch</span>
+              <strong>{Math.round(pitchScore * 100)}%</strong>
             </div>
+            {gradeRhythm && (
+              <div>
+                <span className="muted">Timing</span>
+                <strong>
+                  {Math.round(timingScore * 100)}%
+                  {lastGrade ? ` · ${lastGrade}` : ''}
+                </strong>
+              </div>
+            )}
+            {gradeRhythm && (
+              <div>
+                <span className="muted">Tempo</span>
+                <strong>
+                  {effectiveBpm} BPM
+                  {tempoScale !== 1 && ` · ${Math.round(tempoScale * 100)}%`}
+                </strong>
+              </div>
+            )}
+          </div>
+          {feedback && (
+            <p className={`lesson__coach is-${feedbackKind}`} aria-live="polite">
+              {feedback}
+            </p>
           )}
-        </div>
+        </>
       )}
 
       {phase === 'result' && (
@@ -390,12 +659,30 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
             {gradeRhythm
               ? ` · pitch ${Math.round(pitchScore * 100)}% · timing ${Math.round(timingScore * 100)}%`
               : ''}
+            {gradeRhythm && tempoScale !== 1 ? ` · at ${effectiveBpm} BPM` : ''}
             {passed ? ' · Lesson complete' : ` · Need ${Math.round(passScore * 100)}% to pass`}
           </p>
+          {tips.length > 0 && (
+            <ul className="lesson__tips">
+              {tips.map((tip) => (
+                <li key={tip}>{tip}</li>
+              ))}
+            </ul>
+          )}
           <div className="lesson__actions">
             <button type="button" className="btn btn--ghost" onClick={resetAttempt}>
               Practice again
             </button>
+            {!passed && gradeRhythm && tempoScale > MIN_TEMPO_SCALE && (
+              <button type="button" className="btn btn--primary" onClick={retrySlower}>
+                Retry slower · {slowerBpm} BPM
+              </button>
+            )}
+            {passed && gradeRhythm && tempoScale < 1 && (
+              <button type="button" className="btn btn--ghost" onClick={retryFullSpeed}>
+                Try full speed · {bpm} BPM
+              </button>
+            )}
             {passed && nxt && (
               <button type="button" className="btn btn--primary" onClick={() => onContinue(nxt.id)}>
                 Next lesson

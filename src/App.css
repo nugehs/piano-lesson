@@ -231,6 +231,53 @@
   font-size: 1.05rem;
 }
 
+.lesson__coach {
+  margin: -0.35rem 0 1rem;
+  font-size: 0.95rem;
+  animation: rise 240ms var(--ease-out) both;
+}
+
+.lesson__coach.is-ok {
+  color: var(--sage);
+}
+
+.lesson__coach.is-warn {
+  color: var(--amber-deep);
+}
+
+.lesson__tempo {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-bottom: 1rem;
+}
+
+.lesson__tempo-value {
+  min-width: 8.5ch;
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.lesson__tempo-value em {
+  font-style: normal;
+  color: var(--ink-soft);
+  font-weight: 400;
+}
+
+.btn--compact {
+  padding: 0.5rem 0.95rem;
+  font-size: 0.85rem;
+}
+
+.lesson__tips {
+  margin: 0.6rem 0 1rem;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.3rem;
+  color: var(--ink-soft);
+}
+
 .lesson__result {
   margin-bottom: 1.25rem;
   padding: 1.1rem 0;

@@ -6,6 +6,9 @@ export type LevelId = 'foundations' | 'reading' | 'technique' | 'harmony' | 'rep
 
 export type LessonKind = 'learn' | 'find' | 'sequence' | 'play-along'
 
+/** One expected step: a single note, or several notes played together as a chord. */
+export type LessonStep = Pitch | Pitch[]
+
 export type Lesson = {
   id: string
   levelId: LevelId
@@ -14,10 +17,10 @@ export type Lesson = {
   kind: LessonKind
   /** Teaching copy shown before/during the exercise. */
   teach: string
-  /** Notes to highlight or expect, in order for sequence/play-along. */
-  targets: Pitch[]
+  /** Notes to highlight or expect, in order for sequence/play-along. Arrays are chords. */
+  targets: LessonStep[]
   /** Optional demo melody (same as targets unless overridden). */
-  demo?: Pitch[]
+  demo?: LessonStep[]
   /** Pass threshold for find/sequence (0–1). */
   passScore?: number
   /** Staff clef for notation. */
@@ -236,8 +239,8 @@ export const LESSONS: Lesson[] = [
     title: 'C Major Triad',
     summary: 'C + E + G together.',
     kind: 'sequence',
-    teach: 'Build C major: root C, major third E, perfect fifth G. Play C then E then G for now.',
-    targets: ['C4', 'E4', 'G4'],
+    teach: 'Build C major: root C, major third E, perfect fifth G. Press all three keys together as one chord.',
+    targets: [['C4', 'E4', 'G4']],
     clef: 'treble',
   },
   {
@@ -246,8 +249,8 @@ export const LESSONS: Lesson[] = [
     title: 'A Minor Triad',
     summary: 'The relative minor of C.',
     kind: 'sequence',
-    teach: 'A minor is A–C–E. Same white keys as C major’s world, different home.',
-    targets: ['A4', 'C5', 'E5'],
+    teach: 'A minor is A–C–E. Same white keys as C major’s world, different home. Play the three notes together.',
+    targets: [['A4', 'C5', 'E5']],
     clef: 'treble',
   },
   {
@@ -256,8 +259,12 @@ export const LESSONS: Lesson[] = [
     title: 'I–V–I Cadence',
     summary: 'Home → away → home.',
     kind: 'sequence',
-    teach: 'Play C major (C–E–G), then G major (G–B–D), then back to C.',
-    targets: ['C4', 'E4', 'G4', 'G4', 'B4', 'D5', 'C4', 'E4', 'G4'],
+    teach: 'Play C major (C–E–G), then G major (G–B–D), then back to C. Each chord sounds as one press.',
+    targets: [
+      ['C4', 'E4', 'G4'],
+      ['G4', 'B4', 'D5'],
+      ['C4', 'E4', 'G4'],
+    ],
     clef: 'treble',
   },
   {
@@ -329,8 +336,12 @@ export const LESSONS: Lesson[] = [
     title: 'C Major Inversions',
     summary: 'Same chord, different bass.',
     kind: 'sequence',
-    teach: 'Root: C–E–G. First inversion: E–G–C. Second: G–C–E.',
-    targets: ['C4', 'E4', 'G4', 'E4', 'G4', 'C5', 'G4', 'C5', 'E5'],
+    teach: 'Root: C–E–G. First inversion: E–G–C. Second: G–C–E. Play each shape as one chord.',
+    targets: [
+      ['C4', 'E4', 'G4'],
+      ['E4', 'G4', 'C5'],
+      ['G4', 'C5', 'E5'],
+    ],
     clef: 'treble',
   },
   {
@@ -339,8 +350,11 @@ export const LESSONS: Lesson[] = [
     title: 'Dominant Seventh',
     summary: 'C7 pulls hard toward F.',
     kind: 'sequence',
-    teach: 'C7 is C–E–G–B♭. Play the four notes, then resolve to F (F–A–C).',
-    targets: ['C4', 'E4', 'G4', 'A#4', 'F4', 'A4', 'C5'],
+    teach: 'C7 is C–E–G–B♭. Play the four notes together, then resolve to F major (F–A–C).',
+    targets: [
+      ['C4', 'E4', 'G4', 'A#4'],
+      ['F4', 'A4', 'C5'],
+    ],
     clef: 'treble',
   },
   {

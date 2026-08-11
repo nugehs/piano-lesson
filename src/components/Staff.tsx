@@ -10,7 +10,8 @@ import {
 import './Staff.css'
 
 export type StaffNote = {
-  pitch: Pitch
+  /** One pitch for a single note, several for a chord (rendered stacked). */
+  pitches: Pitch[]
   /** Optional duration in beats for note head / stem styling. */
   duration?: number
   /** Highlight state */
@@ -78,13 +79,19 @@ export function Staff({ notes, clef = 'treble', cursor = 0, label }: StaffProps)
   const rendered = useMemo(
     () =>
       notes.map((note, index) => {
-        const step = pitchToStaffStep(note.pitch)
-        const cy = staffBottomY + stepToStaffY(step, clef, LINE_GAP)
+        const heads = note.pitches.map((pitch) => {
+          const step = pitchToStaffStep(pitch)
+          return {
+            pitch,
+            step,
+            cy: staffBottomY + stepToStaffY(step, clef, LINE_GAP),
+          }
+        })
         const cx = LEFT + index * NOTE_GAP
         const state =
           note.state ??
           (index < cursor ? 'done' : index === cursor ? 'current' : 'idle')
-        return { ...note, step, cx, cy, state, index }
+        return { ...note, heads, cx, state, index }
       }),
     [notes, clef, cursor, staffBottomY],
   )
@@ -121,15 +128,25 @@ export function Staff({ notes, clef = 'treble', cursor = 0, label }: StaffProps)
 
         {rendered.map((note) => {
           const head = noteHeadRadius(note.duration)
-          const ledgers = ledgerLines(note.step, clef, staffBottomY)
-          const stemUp = note.step < (clef === 'treble' ? 6 : -5)
+          const ledgers = [
+            ...new Set(note.heads.flatMap((h) => ledgerLines(h.step, clef, staffBottomY))),
+          ]
+          const avgStep = note.heads.reduce((sum, h) => sum + h.step, 0) / note.heads.length
+          const stemUp = avgStep < (clef === 'treble' ? 6 : -5)
           const stemX = stemUp ? note.cx + head.rx - 1 : note.cx - head.rx + 1
-          const stemY1 = note.cy
-          const stemY2 = stemUp ? note.cy - 28 : note.cy + 28
+          const cys = note.heads.map((h) => h.cy)
+          // Stem spans the whole chord, extending past the outermost head.
+          const stemY1 = stemUp ? Math.max(...cys) : Math.min(...cys)
+          const stemY2 = stemUp ? Math.min(...cys) - 28 : Math.max(...cys) + 28
           const showStem = (note.duration ?? 1) < 2
+          const pulseCy = (Math.min(...cys) + Math.max(...cys)) / 2
+          const pulseR = 14 + (Math.max(...cys) - Math.min(...cys)) / 2
 
           return (
-            <g key={`${note.pitch}-${note.index}`} className={`staff__note is-${note.state}`}>
+            <g
+              key={`${note.heads.map((h) => h.pitch).join('-')}-${note.index}`}
+              className={`staff__note is-${note.state}`}
+            >
               {ledgers.map((y) => (
                 <line
                   key={y}
@@ -141,28 +158,31 @@ export function Staff({ notes, clef = 'treble', cursor = 0, label }: StaffProps)
                 />
               ))}
 
-              {needsAccidental(note.pitch) && (
-                <text x={note.cx - 16} y={note.cy + 4} className="staff__accidental">
-                  {accidentalLabel(note.pitch)}
-                </text>
-              )}
-
-              <ellipse
-                cx={note.cx}
-                cy={note.cy}
-                rx={head.rx}
-                ry={head.ry}
-                transform={`rotate(-18 ${note.cx} ${note.cy})`}
-                className={`staff__head ${head.filled ? 'is-filled' : 'is-open'}`}
-                filter={`url(#${uid}-soft)`}
-              />
+              {note.heads.map((h) => (
+                <g key={h.pitch}>
+                  {needsAccidental(h.pitch) && (
+                    <text x={note.cx - 16} y={h.cy + 4} className="staff__accidental">
+                      {accidentalLabel(h.pitch)}
+                    </text>
+                  )}
+                  <ellipse
+                    cx={note.cx}
+                    cy={h.cy}
+                    rx={head.rx}
+                    ry={head.ry}
+                    transform={`rotate(-18 ${note.cx} ${h.cy})`}
+                    className={`staff__head ${head.filled ? 'is-filled' : 'is-open'}`}
+                    filter={`url(#${uid}-soft)`}
+                  />
+                </g>
+              ))}
 
               {showStem && (
                 <line x1={stemX} x2={stemX} y1={stemY1} y2={stemY2} className="staff__stem" />
               )}
 
               {note.state === 'current' && (
-                <circle cx={note.cx} cy={note.cy} r={14} className="staff__pulse" />
+                <circle cx={note.cx} cy={pulseCy} r={pulseR} className="staff__pulse" />
               )}
             </g>
           )
