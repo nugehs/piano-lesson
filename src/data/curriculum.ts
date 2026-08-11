@@ -1,8 +1,16 @@
 import type { Pitch } from '../lib/music'
+import type { FretPosition } from '../lib/guitar'
 import { fromDurations, quarters, type RhythmEvent } from '../lib/rhythm'
 import type { Clef } from '../lib/staff'
 
-export type LevelId = 'foundations' | 'reading' | 'technique' | 'harmony' | 'repertoire' | 'advanced'
+export type LevelId =
+  | 'foundations'
+  | 'reading'
+  | 'technique'
+  | 'harmony'
+  | 'repertoire'
+  | 'advanced'
+  | 'chords'
 
 export type LessonKind = 'learn' | 'find' | 'sequence' | 'play-along'
 
@@ -21,6 +29,11 @@ export type Lesson = {
   targets: LessonStep[]
   /** Optional demo melody (same as targets unless overridden). */
   demo?: LessonStep[]
+  /**
+   * Preferred fretting for each target step (guitar).
+   * Parallel to targets — one FretPosition[] per step.
+   */
+  fingerings?: FretPosition[][]
   /** Pass threshold for find/sequence (0–1). */
   passScore?: number
   /** Staff clef for notation. */

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { Lesson } from '../data/curriculum'
 import { nextLesson } from '../data/curriculum'
+import { nextGuitarLesson } from '../data/guitarCurriculum'
+import { usePitchDetect } from '../hooks/usePitchDetect'
+import type { Instrument } from '../lib/instrument'
+import {
+  preferredFret,
+  type FretPosition,
+} from '../lib/guitar'
 import type { MidiConnection } from '../lib/midi'
 import { metronome } from '../lib/metronome'
 import { noteLabel, pitchToMidi, type NoteName, type Pitch } from '../lib/music'
@@ -13,11 +20,15 @@ import {
   type TimingResult,
 } from '../lib/rhythm'
 import { synth } from '../lib/synth'
+import { Fretboard } from './Fretboard'
 import { Piano } from './Piano'
 import { Staff, type StaffNote } from './Staff'
+import { TabStrip, type TabStep } from './TabStrip'
 
 /** All chord notes must land within this window of the first one. */
 const CHORD_WINDOW_MS = 400
+/** Guitar chords / strums are often arpeggiated into the mic — allow more time. */
+const GUITAR_CHORD_WINDOW_MS = 1400
 const MIN_TEMPO_SCALE = 0.5
 const MAX_TEMPO_SCALE = 1.2
 const TEMPO_STEP = 0.1
@@ -30,6 +41,13 @@ function formatPitch(pitch: Pitch): string {
 
 function formatStep(step: Pitch[]): string {
   return step.map(formatPitch).join(' + ')
+}
+
+function pitchesToFrets(pitches: Pitch[], fallback?: FretPosition[]): FretPosition[] {
+  if (fallback && fallback.length > 0) return fallback
+  return pitches
+    .map((p) => preferredFret(p))
+    .filter((p): p is FretPosition => Boolean(p))
 }
 
 /** Coaching line for a wrong pitch: direction and distance to the expected note. */
@@ -64,6 +82,7 @@ function describeTiming(result: TimingResult): string {
 
 type LessonPlayerProps = {
   lesson: Lesson
+  instrument?: Instrument
   onComplete: (score: number, passed: boolean) => void
   onExit: () => void
   onContinue: (nextId: string) => void
@@ -155,7 +174,15 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonPlayerProps) {
+export function LessonPlayer({
+  lesson,
+  instrument = 'piano',
+  onComplete,
+  onExit,
+  onContinue,
+}: LessonPlayerProps) {
+  const isGuitar = instrument === 'guitar'
+  const chordWindowMs = isGuitar ? GUITAR_CHORD_WINDOW_MS : CHORD_WINDOW_MS
   const [lessonState, dispatch] = useReducer(lessonReducer, initialLessonState)
   const [lastGrade, setLastGrade] = useState<TimingGrade | null>(null)
   const [flashOk, setFlashOk] = useState<Pitch[]>([])
@@ -172,6 +199,7 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
   // Source of truth for chord collection: MIDI chords deliver several noteOns in
   // the same tick, before React re-renders, so state alone would be stale.
   const collectedRef = useRef<Pitch[]>([])
+  const handleNoteRef = useRef<(pitch: Pitch) => void>(() => {})
 
   const {
     phase,
@@ -192,11 +220,16 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
     () => lesson.targets.map((t) => (Array.isArray(t) ? t : [t])),
     [lesson.targets],
   )
+  const stepFingerings = useMemo(
+    () => lesson.fingerings ?? steps.map(() => [] as FretPosition[]),
+    [lesson.fingerings, steps],
+  )
   const bpm = lesson.bpm ?? DEFAULT_BPM
   const effectiveBpm = Math.max(30, Math.round(bpm * tempoScale))
   const gradeRhythm = Boolean(lesson.gradeRhythm)
   const countIn = lesson.countIn ?? 4
   const currentStep = steps[index] ?? []
+  const currentFingering = stepFingerings[index] ?? []
   const onsets = useMemo(
     () => expectedOnsets(steps.length, effectiveBpm, lesson.rhythm),
     [steps.length, effectiveBpm, lesson.rhythm],
@@ -231,6 +264,31 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
     [steps, lesson.rhythm, index, phase],
   )
 
+  const tabSteps: TabStep[] = useMemo(
+    () =>
+      steps.map((pitches, i) => ({
+        positions: pitchesToFrets(pitches, stepFingerings[i]),
+        state: i < index ? 'done' : i === index && phase === 'practice' ? 'current' : 'idle',
+      })),
+    [steps, stepFingerings, index, phase],
+  )
+
+  const flashOkFrets = useMemo(
+    () => pitchesToFrets(flashOk, flashOk.length ? currentFingering : undefined),
+    [flashOk, currentFingering],
+  )
+  const flashBadFrets = useMemo(() => pitchesToFrets(flashBad), [flashBad])
+  const guideFrets = useMemo(() => {
+    if (phase === 'result') return []
+    if (lesson.kind === 'learn') {
+      return stepFingerings.flat()
+    }
+    if (phase === 'practice' || phase === 'countdown' || phase === 'teach') {
+      return currentFingering.length > 0 ? currentFingering : pitchesToFrets(currentStep)
+    }
+    return []
+  }, [phase, lesson.kind, stepFingerings, currentFingering, currentStep])
+
   const clearChordTimer = useCallback(() => {
     if (chordTimer.current !== null) {
       window.clearTimeout(chordTimer.current)
@@ -242,6 +300,13 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
     clearChordTimer()
     collectedRef.current = []
   }, [clearChordTimer])
+
+  const mic = usePitchDetect({
+    enabled: isGuitar,
+    onNoteOn: (pitch) => {
+      if (phase === 'practice') handleNoteRef.current(pitch)
+    },
+  })
 
   useEffect(() => {
     dispatch({ type: 'RESET' })
@@ -405,7 +470,7 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
           setFlashOk([])
           setFlashBad(step)
           window.setTimeout(() => setFlashBad([]), 280)
-        }, CHORD_WINDOW_MS)
+        }, chordWindowMs)
       }
     },
     [
@@ -419,8 +484,13 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
       gradeRhythm,
       onsets,
       resetChordCollection,
+      chordWindowMs,
     ],
   )
+
+  useEffect(() => {
+    handleNoteRef.current = handleNote
+  }, [handleNote])
 
   async function startPractice(scale = tempoScale) {
     await synth.unlock()
@@ -488,7 +558,11 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
     const list: string[] = []
     const worst = Object.entries(missCounts).sort((a, b) => b[1] - a[1])[0]
     if (worst && worst[1] >= 2) {
-      list.push(`${worst[0]} caused ${worst[1]} misses — find it on the keys before you restart.`)
+      list.push(
+        `${worst[0]} caused ${worst[1]} misses — find it on the ${
+          isGuitar ? 'neck' : 'keys'
+        } before you restart.`,
+      )
     }
     const timedHits = earlyHits + lateHits
     if (gradeRhythm && timedHits >= 3) {
@@ -500,7 +574,7 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
       list.push('Slow the tempo, nail every note, then build speed back up.')
     }
     return list
-  }, [phase, missCounts, earlyHits, lateHits, gradeRhythm, passed, timingScore, tempoScale])
+  }, [phase, missCounts, earlyHits, lateHits, gradeRhythm, passed, timingScore, tempoScale, isGuitar])
 
   const guide =
     phase === 'practice' &&
@@ -510,7 +584,7 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
         ? steps.flat()
         : []
 
-  const nxt = nextLesson(lesson.id)
+  const nxt = isGuitar ? nextGuitarLesson(lesson.id) : nextLesson(lesson.id)
   const midiLabel =
     midi?.status === 'ready'
       ? midi.message
@@ -530,6 +604,7 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
           className="text-btn"
           onClick={() => {
             metronome.stop()
+            mic.stop()
             onExit()
           }}
         >
@@ -543,14 +618,55 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
 
       <p className="lesson__teach">{lesson.teach}</p>
 
-      <div className="lesson__staff">
-        <Staff
-          notes={staffNotes}
-          clef={lesson.clef ?? 'treble'}
-          cursor={phase === 'practice' || phase === 'countdown' ? index : phase === 'result' ? steps.length : 0}
-          label={`${lesson.title} notation`}
-        />
-      </div>
+      {isGuitar ? (
+        <div className="lesson__staff">
+          <TabStrip steps={tabSteps} label={`${lesson.title} tablature`} />
+        </div>
+      ) : (
+        <div className="lesson__staff">
+          <Staff
+            notes={staffNotes}
+            clef={lesson.clef ?? 'treble'}
+            cursor={
+              phase === 'practice' || phase === 'countdown'
+                ? index
+                : phase === 'result'
+                  ? steps.length
+                  : 0
+            }
+            label={`${lesson.title} notation`}
+          />
+        </div>
+      )}
+
+      {isGuitar && (
+        <div className="lesson__mic">
+          {mic.isActive ? (
+            <button type="button" className="btn btn--ghost btn--compact" onClick={mic.stop}>
+              Mute mic
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--primary btn--compact"
+              onClick={() => void mic.start()}
+            >
+              Enable mic
+            </button>
+          )}
+          <p
+            className={`hint midi-status is-${
+              mic.status === 'listening' || mic.status === 'quiet'
+                ? 'ready'
+                : mic.status === 'denied' || mic.status === 'error'
+                  ? 'error'
+                  : 'idle'
+            }`}
+          >
+            {mic.message}
+          </p>
+        </div>
+      )}
 
       {phase === 'teach' && (
         <>
@@ -698,19 +814,36 @@ export function LessonPlayer({ lesson, onComplete, onExit, onContinue }: LessonP
       )}
 
       <div className="lesson__piano">
-        <Piano
-          start="C3"
-          end="G5"
-          guidePitches={phase === 'result' ? [] : guide}
-          successPitches={flashOk}
-          errorPitches={flashBad}
-          onNoteOn={handleNote}
-          onMidiConnection={setMidi}
-        />
-        <p className={`hint midi-status is-${midi?.status ?? 'idle'}`}>{midiLabel}</p>
-        <p className="hint">
-          Play on your Yamaha (USB MIDI), click keys, or use A S D F G H J K · W E T Y U for black keys
-        </p>
+        {isGuitar ? (
+          <>
+            <Fretboard
+              guide={phase === 'result' ? [] : guideFrets}
+              success={flashOkFrets}
+              error={flashBadFrets}
+              onNoteOn={(pitch) => handleNote(pitch)}
+            />
+            <p className="hint">
+              Play on your guitar into the mic, or tap frets to practice shapes silently
+            </p>
+          </>
+        ) : (
+          <>
+            <Piano
+              start="C3"
+              end="G5"
+              guidePitches={phase === 'result' ? [] : guide}
+              successPitches={flashOk}
+              errorPitches={flashBad}
+              onNoteOn={handleNote}
+              onMidiConnection={setMidi}
+            />
+            <p className={`hint midi-status is-${midi?.status ?? 'idle'}`}>{midiLabel}</p>
+            <p className="hint">
+              Play on your Yamaha (USB MIDI), click keys, or use A S D F G H J K · W E T Y U for black
+              keys
+            </p>
+          </>
+        )}
       </div>
     </section>
   )

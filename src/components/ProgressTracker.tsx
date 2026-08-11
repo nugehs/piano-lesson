@@ -1,3 +1,4 @@
+import type { Instrument } from '../lib/instrument'
 import {
   clearProgress,
   formatRelativeTime,
@@ -7,17 +8,20 @@ import {
 import './ProgressTracker.css'
 
 type ProgressTrackerProps = {
+  instrument: Instrument
   progress: ProgressState
   onReset: (next: ProgressState) => void
 }
 
-export function ProgressTracker({ progress, onReset }: ProgressTrackerProps) {
-  const summary = getProgressSummary(progress)
+export function ProgressTracker({ instrument, progress, onReset }: ProgressTrackerProps) {
+  const summary = getProgressSummary(progress, instrument)
 
   function handleReset() {
-    const ok = window.confirm('Reset all Keypath progress saved on this device?')
+    const ok = window.confirm(
+      `Reset all ${instrument} progress saved on this device? The other instrument is left alone.`,
+    )
     if (!ok) return
-    onReset(clearProgress())
+    onReset(clearProgress(instrument))
   }
 
   return (
