@@ -6,6 +6,7 @@ import { FreePlay, PathView } from './components/PathView'
 import { Fretboard } from './components/Fretboard'
 import { Piano } from './components/Piano'
 import { TuningCheck } from './components/TuningCheck'
+import { SchoolsGuide } from './components/SchoolsGuide'
 import { usePitchDetect } from './hooks/usePitchDetect'
 import type { MidiConnection } from './lib/midi'
 import {
@@ -28,6 +29,7 @@ type Screen =
   | { name: 'lesson'; id: string }
   | { name: 'free' }
   | { name: 'tune' }
+  | { name: 'schools' }
 
 export default function App() {
   const [instrument, setInstrument] = useState<Instrument>(() => loadInstrument())
@@ -79,8 +81,11 @@ export default function App() {
               setScreen({ name: 'free' })
             }}
             onTune={() => setScreen({ name: 'tune' })}
+            onSchools={() => setScreen({ name: 'schools' })}
           />
         )}
+
+        {screen.name === 'schools' && <SchoolsGuide onExit={() => setScreen({ name: 'path' })} />}
 
         {screen.name === 'lesson' && lesson && (
           <LessonPlayer

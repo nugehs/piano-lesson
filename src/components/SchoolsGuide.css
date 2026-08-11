@@ -1,0 +1,31 @@
+.schools__sections {
+  display: grid;
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.schools__block {
+  padding: 1rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.schools__block h2 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  margin: 0 0 0.55rem;
+}
+
+.schools__block ol,
+.schools__block ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.4rem;
+  color: var(--ink-soft);
+  line-height: 1.45;
+}
+
+.schools__block strong {
+  color: var(--ink);
+  font-weight: 600;
+}

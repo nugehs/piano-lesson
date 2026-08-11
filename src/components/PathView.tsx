@@ -25,6 +25,7 @@ type PathViewProps = {
   onOpenLesson: (id: string) => void
   onFreePlay: () => void
   onTune?: () => void
+  onSchools?: () => void
   onResetProgress: (next: ProgressState) => void
   onInstrumentChange: (instrument: Instrument) => void
   continueId: string
@@ -48,6 +49,7 @@ export function PathView({
   onOpenLesson,
   onFreePlay,
   onTune,
+  onSchools,
   onResetProgress,
   onInstrumentChange,
   continueId,
@@ -88,6 +90,11 @@ export function PathView({
           {instrument === 'guitar' && onTune && (
             <button type="button" className="btn btn--ghost" onClick={onTune}>
               Tune up
+            </button>
+          )}
+          {onSchools && (
+            <button type="button" className="btn btn--ghost" onClick={onSchools}>
+              For schools
             </button>
           )}
         </div>
